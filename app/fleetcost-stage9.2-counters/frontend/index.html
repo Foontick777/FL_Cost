@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FleetCost</title>
+    <style>*, *::before, *::after { box-sizing: border-box; } body { margin: 0; }</style>
+    <script>
+      /* Тема до первой отрисовки.
+         Без этих строк на тёмном системном фоне успевает мигнуть белая страница:
+         полную палитру ставит lib/theme.js, но он загружается как модуль — то есть
+         уже ПОСЛЕ первого кадра. Здесь выставляются только фон и цвет текста,
+         потому что именно они видны в пустом документе.
+
+         Значения обязаны совпадать с LIGHT.app / LIGHT.text и DARK.app / DARK.text
+         в lib/theme.js — это проверяется в `npm run check:logic`, чтобы копия не
+         разошлась с палитрой. */
+      (function () {
+        try {
+          var mode = localStorage.getItem("fc_theme") || "system";
+          var dark = mode === "dark" ||
+            (mode === "system" && window.matchMedia &&
+             window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.setAttribute("data-theme", dark ? "dark" : "light");
+          root.style.colorScheme = dark ? "dark" : "light";
+          root.style.background = dark ? "#141821" : "#f6f8fa";
+          root.style.color = dark ? "#e6edf3" : "#0f172a";
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
