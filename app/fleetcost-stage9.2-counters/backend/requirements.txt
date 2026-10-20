@@ -1,0 +1,35 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.3
+httpx==0.27.2
+# Required for e100_client.py — e100.eu is behind Cloudflare bot
+# protection that 403s httpx's TLS fingerprint. curl_cffi uses
+# libcurl-impersonate to replay Chrome's exact TLS handshake.
+curl_cffi>=0.7,<1.0
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+# 3.3.0 уязвима (CVE-2024-33663 — подмена алгоритма при ECDSA-ключах,
+# CVE-2024-33664 — DoS через JWE). Приложение использует HS256, поэтому
+# практический риск был ограничен, но pin поднят до исправленной ветки 3.5.x.
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+apscheduler==3.10.4
+aiogram==3.13.1
+cryptography==43.0.1
+openpyxl==3.1.5
+reportlab==4.2.4
+python-dotenv==1.0.1
+# ── Security hardening (added in security-v2) ──
+# Rate limiting on /auth/login, /auth/register (and any future sensitive route).
+slowapi==0.1.9
+# Asynchronous retry with tenacity (ECB FX fetch, retry on transient network failures).
+tenacity==9.0.0
+# IANA timezone database for `zoneinfo.ZoneInfo("Europe/Warsaw")`, used by the
+# APScheduler CronTrigger so the daily ECB fetch / audit purge run at a fixed
+# local time. Without it, ZoneInfo falls back to the system tzdata (present on
+# Debian-based images, but not guaranteed) and raises ZoneInfoNotFoundError.
+tzdata==2024.2
