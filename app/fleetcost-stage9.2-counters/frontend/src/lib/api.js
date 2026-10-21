@@ -57,6 +57,36 @@ export function reportUiError(detail) {
 }
 
 /**
+ * Нормализация detail из ответа API. Pydantic-валидация (422) отдаёт МАССИВ
+ * объектов [{type, loc, msg, input, ctx}], и любой код, который вставляет
+ * `data.detail` в JSX без приведения к строке, ронял страницу с «Minified
+ * React error #31» (белый экран). Здесь единая точка превращения такого
+ * объекта в читаемую строку; fxAction.flattenDetail — та же логика для
+ * модуля разбора ответов курсов.
+ */
+export function flattenDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((e) => {
+      if (typeof e === "string") return e;
+      if (!e || typeof e !== "object") return String(e);
+      const msg = e.msg || "";
+      // loc = ["body","currency"] → «currency: ...»; отбрасываем 'body'.
+      const field = Array.isArray(e.loc) ? e.loc.filter((p) => p !== "body").pop() : "";
+      return field ? `${field}: ${msg}` : msg || JSON.stringify(e);
+    }).filter(Boolean);
+    return parts.join("; ");
+  }
+  if (typeof detail === "object") {
+    return Object.entries(detail)
+      .map(([k, v]) => `${k}: ${flattenDetail(v)}`)
+      .join("; ");
+  }
+  return String(detail);
+}
+
+/**
  * Perform a state-changing request and report the outcome.
  *
  * Mutations used to be fire-and-forget: the UI applied its optimistic update
@@ -83,7 +113,7 @@ export async function apiMutate(path, options = {}) {
   try { data = await res.clone().json(); } catch (e) {}
   const error = res.ok
     ? null
-    : (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+    : flattenDetail((data && (data.detail || data.error)) || "") || `HTTP ${res.status}`;
   return { ok: res.ok, status: res.status, data, error };
 }
 
@@ -254,7 +284,9 @@ export async function apiFetch(path, options = {}) {
   if (isStateChange && !res.ok && res.status !== 401) {
     try {
       const body = await res.clone().json().catch(() => null);
-      const detail = (body && (body.detail || body.error)) || `HTTP ${res.status}`;
+      // flattenDetail: при 422 detail — массив объектов pydantic; без
+      // нормализации тост в App.jsx получает объект и падает рендер.
+      const detail = flattenDetail((body && (body.detail || body.error)) || "") || `HTTP ${res.status}`;
       if (_onMutationError) {
         _onMutationError({
           path,

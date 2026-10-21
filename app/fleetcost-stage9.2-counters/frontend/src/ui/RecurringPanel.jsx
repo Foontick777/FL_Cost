@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Segmented } from "./components.jsx";
 import { s } from "./styles.js";
-import { apiFetch, apiGet, reportUiError} from "../lib/api.js";
+import { apiFetch, apiGet, reportUiError, flattenDetail } from "../lib/api.js";
 import { Modal } from "./Modal.jsx";
 import { ExpenseFormModal } from "./ExpenseForm.jsx";
 import { useCategories } from "../lib/categories.js";
@@ -513,7 +513,7 @@ function ChargesModal({ lang, t, contract, onClose, onChanged }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        reportUiError(data?.detail || `HTTP ${res.status}`, t);
+        reportUiError(flattenDetail(data?.detail) || `HTTP ${res.status}`, t);
         return;
       }
       await load();

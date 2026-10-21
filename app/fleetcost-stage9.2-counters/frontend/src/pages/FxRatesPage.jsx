@@ -1,4 +1,4 @@
-import { apiFetch, apiGet } from "../lib/api.js";
+import { apiFetch, apiGet, flattenDetail } from "../lib/api.js";
 import { fxOutcome, fxErrorMessage, fxIsFatal, backfillSummary, rateActions, parseRateInput, fxAutoSummary, fxOtherSummary, fxAutoNote, mayEnterRate } from "../lib/fxAction.js";
 import { s, pill } from "../ui/styles.js";
 import { Card, SkeletonRows } from "../ui/components.jsx";
@@ -266,7 +266,7 @@ export function FxRatesPage({t,lang,embedded}){
           body:JSON.stringify({amount,currency:convert.currency.toUpperCase(),date:convert.date})});
         const d=await r.json().catch(()=>({}));
         if(seq!==convSeq.current) return;                  // ответ устарел
-        if(!r.ok){setConvertResult(null);setConvertError(d.detail||t.fxRateNotFound);}
+        if(!r.ok){setConvertResult(null);setConvertError(flattenDetail(d.detail)||t.fxRateNotFound);}
         else {setConvertResult(d);setConvertError("");}
       }catch(e){
         if(seq===convSeq.current){setConvertResult(null);setConvertError(t.fxServerUnreachable);}
