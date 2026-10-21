@@ -133,6 +133,46 @@ class UserCreate(BaseModel):
 # без этого в базу попадали «eur», «EURO» и опечатки (FC-026 в аудите).
 CurrencyCode = Annotated[str, StringConstraints(to_upper=True, min_length=3, max_length=3)]
 
+# ── Whitelist валют (P0-3) ────────────────────────────────────────────────
+# Система умеет пересчитывать в EUR только валюты из известного набора:
+# архив ЕЦБ + резервный список Frankfurter. Без whitelist прямым запросом к
+# API можно было создать расход в валюте «ABC»: он попадал в отчёты как
+# настоящий, но amount_eur у него оставался NULL навсегда — строка-призрак,
+# которая портит сверку сумм. Держим набор зеркалом fx_autoload.ECB_CURRENCIES;
+# тест test_p0_fixes сверяет оба списка при расхождении.
+ECB_CURRENCIES = frozenset({
+    "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CYP", "CZK", "DKK", "EEK",
+    "GBP", "HKD", "HRK", "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KRW",
+    "LTL", "LVL", "MTL", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "ROL",
+    "RON", "RUB", "SEK", "SGD", "SIT", "SKK", "THB", "TRL", "TRY", "USD", "ZAR",
+})
+
+# Валюты вне ЕЦБ: резервный набор Frankfurter (BYN, RSD, UAH, MDL, GEL) плюс
+# коды, которые Frankfurter реально отдаёт и которые встречаются в перевозках по
+# Европе/Востоку. Живой список сервиса отдаёт /fx-rates/sources; здесь —
+# статический floor для валидации ввода. Тест test_p0_fixes сверяет набор с
+# fx_autoload.ECB_CURRENCIES и фолбэком маршрута form-currencies.
+NON_ECB_ALLOWED = frozenset({
+    "BYN", "RSD", "UAH", "MDL", "GEL",          # фолбэк Frankfurter (ручной ввод)
+    "ALL", "AMD", "BAM", "AZN", "KZT", "MKD",   # поддерживаются Frankfurter
+    "EGP", "TRY", "ILS",                        # рынки рядом с маршрутами
+})
+
+KNOWN_CURRENCIES = frozenset(ECB_CURRENCIES | NON_ECB_ALLOWED | {"EUR"})
+
+
+def validate_known_currency(v: Any) -> str:
+    """Проверка кода валюты на входе: формат + известность источника курса."""
+    v = (v or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", v):
+        raise ValueError("currency must be a 3-letter ISO code, e.g. PLN")
+    if v not in KNOWN_CURRENCIES:
+        raise ValueError(
+            f"Неизвестная валюта '{v}': курса для неё взять неоткуда "
+            "(нет ни в архиве ЕЦБ, ни во Frankfurter)"
+        )
+    return v
+
 
 class UserOut(BaseModel):
     id: int
@@ -598,6 +638,12 @@ class RecurringExpenseCreate(BaseModel):
             raise ValueError(f"amount_mode must be one of: {', '.join(sorted(RECURRING_AMOUNT_MODES))}")
         return v
 
+    # P0-3: whitelist валют на входе.
+    @field_validator("currency")
+    @classmethod
+    def _check_currency(cls, v):
+        return validate_known_currency(v)
+
     @model_validator(mode="after")
     def _require_some_amount(self):
         """Хотя бы один способ задать сумму обязателен.
@@ -664,6 +710,14 @@ class RecurringExpenseUpdate(BaseModel):
         if v not in RECURRING_EXPENSE_FREQUENCIES:
             raise ValueError(f"frequency must be one of: {', '.join(sorted(RECURRING_EXPENSE_FREQUENCIES))}")
         return v
+
+    # P0-3: whitelist валют (None = «валюту не меняли» — пропускаем).
+    @field_validator("currency")
+    @classmethod
+    def _check_currency(cls, v):
+        if v is None or not str(v).strip():
+            return None
+        return validate_known_currency(v)
 
     @model_validator(mode="after")
     def _check_monthly_total(self):
@@ -768,10 +822,9 @@ class FxRateCreate(BaseModel):
     @field_validator("currency")
     @classmethod
     def _normalise_currency(cls, v: str) -> str:
-        v = (v or "").strip().upper()
-        if not re.fullmatch(r"[A-Z]{3}", v):
-            raise ValueError("currency must be a 3-letter ISO code, e.g. PLN")
-        return v
+        # P0-3: whitelist вместо голого regex — курс вводится только для валют,
+        # которые система способна опознать (ЕЦБ или Frankfurter-набор).
+        return validate_known_currency(v)
 
 
 class FxRateBulkCreate(BaseModel):
@@ -799,10 +852,8 @@ class FxRateBulkCreate(BaseModel):
     @field_validator("currency")
     @classmethod
     def _normalise_currency(cls, v: str) -> str:
-        v = (v or "").strip().upper()
-        if not re.fullmatch(r"[A-Z]{3}", v):
-            raise ValueError("currency must be a 3-letter ISO code, e.g. PLN")
-        return v
+        # P0-3: тот же whitelist, что и в FxRateCreate.
+        return validate_known_currency(v)
 
 
 class FxConversionRequest(BaseModel):
