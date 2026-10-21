@@ -1,0 +1,72 @@
+"""Alembic environment for FleetCost.
+
+Reads the same DATABASE_URL as the application but converts the async
+asyncpg URL to a sync psycopg URL (alembic migrations run synchronously
+in their own short-lived transactions).
+"""
+import os
+import sys
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+
+# Make `app` importable when alembic runs from the backend/ directory
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.core.config import settings  # noqa: E402
+from app.core.database import Base  # noqa: E402
+from app.models import models  # noqa: E402,F401  (register models on Base.metadata)
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+
+def _sync_url() -> str:
+    """Translate async URLs to sync URLs for alembic.
+    Handles both PostgreSQL (asyncpg → psycopg2) and SQLite (aiosqlite → sqlite3)."""
+    url = os.environ.get("DATABASE_URL") or settings.DATABASE_URL
+    return (
+        url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+           .replace("postgresql://", "postgresql+psycopg2://")
+           .replace("sqlite+aiosqlite://", "sqlite://")
+    )
+
+
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    url = _sync_url()
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        compare_server_default=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    cfg = config.get_section(config.config_ini_section) or {}
+    cfg["sqlalchemy.url"] = _sync_url()
+    connectable = engine_from_config(cfg, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

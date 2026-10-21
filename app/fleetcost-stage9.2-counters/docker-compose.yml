@@ -1,0 +1,133 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fleetcost}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-fleetcost}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # ── HARDENING ────────────────────────────────────────────────────────
+    # The database used to be published on 5432:5432, i.e. reachable from the
+    # host/network with only a password between an attacker and the whole
+    # accounting database. Containers reach it as `postgres:5432` over the
+    # compose network, so no host port is needed.
+    # Uncomment ONLY if you need a GUI client (DBeaver/psql) from the host:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fleetcost}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  backend:
+    build: ./backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fleetcost}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-fleetcost}
+    # ── HARDENING ────────────────────────────────────────────────────────
+    # No host port: nginx (the `frontend` service) proxies /api to
+    # backend:8000 inside the compose network, so exposing 8000 publicly only
+    # bypassed the reverse proxy. Uncomment to debug without nginx:
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app
+    # --proxy-headers + --forwarded-allow-ips: without these, FastAPI sees
+    # every request as coming from the nginx container IP. That (a) made the
+    # per-IP rate limiter a single global bucket (10 logins/min for the whole
+    # company) and (b) made the audit log record the proxy instead of the
+    # client. "forwarded-allow-ips=*" is safe here because the port is not
+    # published — only the compose network can reach uvicorn.
+    command: >
+      sh -c "python -m app.scripts.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:8000/api/health', timeout=5); print(r.read().decode()[:80])\" || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  frontend:
+    build: ./frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── DEP-01 (аудит stage8): ежедневный бэкап БД ─────────────────────────
+  # Запускается ТОЛЬКО вместе с профилем backup, поэтому базовый
+  # `docker compose up -d` остаётся как был:
+  #     docker compose --profile backup up -d
+  # Дампы (-Fc) кладутся в том db_backups; HOST-скрипты deploy/backup.sh +
+  # cron на хосте — предпочтительный вариант (см. deploy/BACKUP.md), этот
+  # сервис — минимум, чтобы бэкап существовал даже без настройки cron.
+  db_backup:
+    image: postgres:16
+    profiles: ["backup"]
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-fleetcost}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      PGDATABASE: ${POSTGRES_DB:-fleetcost}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - db_backups:/backups
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "db_backup: дамп каждые ${BACKUP_INTERVAL_SECONDS:-86400}s, ротация ${BACKUP_RETENTION_DAYS:-14} дней"
+        while true; do
+          STAMP=$$(date +%Y%m%d_%H%M%S)
+          OUT=/backups/fleetcost_$${STAMP}.dump
+          if pg_dump -Fc -f "$$OUT" 2>/tmp/err.log; then
+            SIZE=$$(du -h "$$OUT" | cut -f1)
+            echo "$$(date -Is) ✓ $$OUT ($$SIZE)"
+          else
+            echo "$$(date -Is) ✗ pg_dump failed: $$(cat /tmp/err.log)"
+            rm -f "$$OUT"
+          fi
+          find /backups -name 'fleetcost_*.dump' -mtime +$$BACKUP_RETENTION_DAYS -delete
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  db_backups:
