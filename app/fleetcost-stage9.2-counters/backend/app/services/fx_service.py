@@ -515,11 +515,19 @@ async def _get_rate_uncached(currency: str, target_date: date, db: Optional[Asyn
             # Helper: try company-specific first, then global, for a given
             # WHERE clause + ORDER BY.
             async def _try_lookup(where_clause, order_by=None):
-                # Company-specific
+                # Company-specific — ТОЛЬКО ручные записи (P0-2 / PRIV-1).
+                # Ручной курс компании имеет смысл там, где официального источника
+                # нет (BYN, RSD, UAH…) или владелец сознательно переопределил ЕЦБ.
+                # Без фильтра по source любая company-запись (в т.ч. с подделанным
+                # через API source="ECB") перебивала бы глобальный официальный
+                # курс для всех строк компании и молча меняла уже посчитанную
+                # историю. Автокурсы Frankfurter пишутся только глобально
+                # (company_id IS NULL), поэтому их фильтр не затрагивает.
                 q = select(FxRate.rate_to_eur, FxRate.rate_date, FxRate.source).where(
                     and_(
                         FxRate.currency == currency,
                         FxRate.company_id == company_id,
+                        FxRate.source == "manual",
                         *where_clause,
                     )
                 )

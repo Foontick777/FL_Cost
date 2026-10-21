@@ -458,8 +458,22 @@ async def update_recurring(
         contract.currency = data.currency
     if data.frequency is not None:
         contract.frequency = data.frequency
-    if data.day_of_month is not None:
+    # P0-5: различаем «не прислали» / «прислали null» и для дня списания —
+    # раньше сервер трактовал day_of_month=None как «не меняли», а клиент при
+    # очистке поля подставлял день из даты начала, и правка молча сдвигала день
+    # списания (или упиралась в блокировку §7). Теперь явный null = «вернуть
+    # авто-день»: день берётся из даты начала, это НЕ считается изменением.
+    fields_set = getattr(data, "model_fields_set", set())
+    day_provided = "day_of_month" in fields_set
+    if day_provided and data.day_of_month is None:
+        new_day = start_auto_day = (data.start_date or contract.start_date).day
+        contract.day_of_month = min(28, max(1, new_day))
+        _day_is_autofallback = True
+    elif data.day_of_month is not None:
         contract.day_of_month = data.day_of_month
+        _day_is_autofallback = False
+    else:
+        _day_is_autofallback = False
     if data.document_ref is not None:
         contract.document_ref = (data.document_ref or "").strip() or None
     if data.comment is not None:
@@ -486,6 +500,13 @@ async def update_recurring(
         locked.append("дата начала")
     if data.day_of_month is not None and data.day_of_month != orig_day_of_month:
         locked.append("день списания")
+    elif day_provided and data.day_of_month is None and _day_is_autofallback:
+        # P0-5: явная очистка поля = «вернуть авто-день». Если авто-день
+        # совпадает с текущим сохранённым — изменения графика нет и блокировка
+        # не нужна; если не совпадает — это реальная смена дня, трактуем её
+        # так же, как явную (без этого дыра в §7: null обходил бы замок).
+        if contract.day_of_month != orig_day_of_month:
+            locked.append("день списания")
     if locked:
         existing_charges = (await db.execute(
             select(func.count()).select_from(Transaction).where(
@@ -507,7 +528,9 @@ async def update_recurring(
     # §9 ревью: отличаем «поле не прислали» от «прислали null». Без этого договор
     # нельзя было сделать бессрочным: frontend отправляет end_date=null, а сервер
     # считал это «не меняли» и оставлял прежнюю дату окончания.
-    fields_set = getattr(data, "model_fields_set", set())
+    # P0-5: fields_set уже вычислен выше (блок дня списания) — повторный getattr
+    # убран, поведение не меняется, но исключает расхождение двух копий одного
+    # выражения при будущих правках.
     end_provided = "end_date" in fields_set
     if end_provided:
         end = data.end_date

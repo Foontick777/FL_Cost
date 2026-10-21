@@ -13,7 +13,7 @@ from app.models.models import (
     RecurringTombstone, LeasingTombstone, TrailerTombstone, InsuranceTombstone,
     RecurringExpenseTombstone,
 )
-from app.schemas.schemas import CurrencyCode
+from app.schemas.schemas import CurrencyCode, validate_known_currency
 from app.services import audit_service, fx_service, category_service
 from app.services import fx_autoload, recurring_expense_service
 from app.api.routes import trailers as trailer_service
@@ -46,7 +46,6 @@ class ManualExpenseCreate(BaseModel):
     # ── Легаси-параметр (совместимость) ──
     category: Optional[str] = None      # "other_fine" | "general_other" | "salary_zus" | ...
     volume: Optional[Decimal] = Field(default=None, gt=0)    # liters, used for manual fuel entries
-    country: Optional[str] = None       # ISO-2 code, e.g. "BY"
     # ── Новые параметры ──
     section: Optional[str] = None       # other | trailer | general | salary | salary_tax | insurance
     category_code: Optional[str] = None
@@ -62,6 +61,10 @@ class ManualExpenseCreate(BaseModel):
     # Раньше форма их отправляла, а сервер молча отбрасывал: поля не были
     # объявлены в схеме, и конструктор договора их не передавал — данные
     # терялись без ошибки (дефект аудита stage9.1).
+    # D-1: здесь было второе объявление `country` (с комментарием «ISO-2»),
+    # которое Python затирал этим — убрали дубль. Значение нормализуем на
+    # маршрутах: для разового расхода — upper(), как делалось раньше; поле
+    # остаётся свободным текстом (страна полиса, не обязательно ISO-код).
     country: Optional[str] = Field(default=None, max_length=60)
     policy_number: Optional[str] = Field(default=None, max_length=100)
     insurer: Optional[str] = Field(default=None, max_length=200)
@@ -102,6 +105,13 @@ class ManualExpenseCreate(BaseModel):
         if v not in ("monthly", "quarterly", "yearly", "weekly"):
             raise ValueError("periodicity must be one of: monthly, quarterly, yearly, weekly")
         return v
+
+    # P0-3: whitelist валют на входе. CurrencyCode проверяет только формат
+    # («3 заглавные буквы»), и расход в «ABC» доходил до базы без курса EUR.
+    @field_validator("currency")
+    @classmethod
+    def _check_currency(cls, v):
+        return validate_known_currency(v)
 
 
 async def _resolve_expense_category(db: AsyncSession, company_id: int, data: "ManualExpenseCreate"):
