@@ -50,6 +50,35 @@ export function fxIsFatal(kind) {
   return kind === "network" || kind === "gateway" || kind === "http" || kind === "ecb";
 }
 
+/**
+ * Pydantic-валидация (HTTP 422) приходит как detail = МАССИВ объектов
+ * [{type, loc, msg, input, ctx}, ...]. Такой объект нельзя рендерить в JSX —
+ * React падает с «Minified React error #31» и пользователь видит белый экран
+ * вместо текста ошибки (проверено на вводе несуществующей валюты). Поэтому
+ * любой не-строковый detail сначала превращаем в человекочитаемую строку.
+ */
+export function flattenDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((e) => {
+      if (typeof e === "string") return e;
+      if (!e || typeof e !== "object") return String(e);
+      const msg = e.msg || "";
+      // loc = ["body","currency"] → «currency: ...»; отбрасываем 'body'.
+      const field = Array.isArray(e.loc) ? e.loc.filter((p) => p !== "body").pop() : "";
+      return field ? `${field}: ${msg}` : msg || JSON.stringify(e);
+    }).filter(Boolean);
+    return parts.join("; ");
+  }
+  if (typeof detail === "object") {
+    return Object.entries(detail)
+      .map(([k, v]) => `${k}: ${flattenDetail(v)}`)
+      .join("; ");
+  }
+  return String(detail);
+}
+
 /** Текст для оператора по типу неудачи. Всегда говорит, что делать дальше. */
 export function fxErrorMessage(kind, res, data) {
   const status = (res && res.status) || 0;
@@ -68,10 +97,12 @@ export function fxErrorMessage(kind, res, data) {
       return `Не удалось загрузить курсы ЕЦБ: ${(data && data.message) || "причина не указана"} `
            + `Пока архив не загрузится, пересчёт будет оставлять строки без курса.`;
     case "partial":
-      return (data && data.message)
+      return flattenDetail((data && (data.message || data.detail)) || "")
           || "Загрузилось не всё: часть данных не записалась. Повторный запуск продолжится.";
     default:
-      return (data && (data.detail || data.error)) || `HTTP ${status}`;
+      // flattenDetail обязателен: при 422 detail — массив объектов pydantic,
+      // и без нормализации вызывающий код рендерит объект в JSX → белый экран.
+      return flattenDetail((data && (data.detail || data.error)) || "") || `HTTP ${status}`;
   }
 }
 

@@ -156,6 +156,12 @@ NON_ECB_ALLOWED = frozenset({
     "BYN", "RSD", "UAH", "MDL", "GEL",          # фолбэк Frankfurter (ручной ввод)
     "ALL", "AMD", "BAM", "AZN", "KZT", "MKD",   # поддерживаются Frankfurter
     "EGP", "TRY", "ILS",                        # рынки рядом с маршрутами
+    # ── Полный список пар Frankfurter/ECB (dev.frankfurter.app/currencies). ──
+    # Добавлен после того, как whitelist отверг валидные коды (белый экран из-за
+    # 422 + сырой объект detail во фронтенде). Валюты вне этого списка действительно
+    # не имеют автоматического источника — для них остаётся ручной курс.
+    "AUD", "BRL", "CAD", "CHF", "CNY", "HKD", "IDR", "ILS", "INR", "JPY",
+    "KRW", "MXN", "MYR", "NOK", "NZD", "PHP", "SGD", "THB", "USD", "ZAR",
 })
 
 KNOWN_CURRENCIES = frozenset(ECB_CURRENCIES | NON_ECB_ALLOWED | {"EUR"})

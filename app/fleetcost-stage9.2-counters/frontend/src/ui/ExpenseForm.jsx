@@ -23,7 +23,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal } from "./Modal.jsx";
 import { s } from "./styles.js";
 import { CategorySelect } from "./CategorySelect.jsx";
-import { apiFetch, reportUiError } from "../lib/api.js";
+import { apiFetch, reportUiError, flattenDetail } from "../lib/api.js";
 import { useCurrencyList } from "../lib/currencies.js";
 import { sectionLabel, SECTION_META, useCategories, initialScopeFor, scopeOptionsFor } from "../lib/categories.js";
 import { AMOUNT_MODES, FREQUENCIES, fmtMoney, countPastCharges } from "../lib/recurring.js";
@@ -394,8 +394,10 @@ export function ExpenseFormModal({
     try { data = await res.clone().json(); } catch (e) {}
     setBusy(false);
     if (!res.ok) {
-      const detail = (data && data.detail) || `HTTP ${res.status}`;
-      const text = Array.isArray(detail) ? detail.map((d) => d.msg).join("; ") : String(detail);
+      // flattenDetail: при 422 (например, неизвестная валюта) detail — массив
+      // объектов pydantic; d.msg есть не у каждого элемента, и объект в JSX
+      // ронял страницу («Minified React error #31», белый экран).
+      const text = flattenDetail((data && data.detail) || "") || `HTTP ${res.status}`;
       setError(text);
       reportUiError(text);
       return;
