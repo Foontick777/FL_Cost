@@ -224,7 +224,11 @@ async def add_manual_rate(
     if existing:
         old_snapshot = audit_service.snapshot(existing)
         existing.rate_to_eur = body.rate_to_eur
-        existing.source = body.source or "manual"
+        # D-3: источник company-записи всегда "manual". Поле `source` из тела
+        # запроса игнорируется: раньше клиент мог передать source="ECB" и
+        # получить запись, которая обходит фильтр «только ручные курсы» в
+        # fx_service._get_rate_uncached (P0-2).
+        existing.source = "manual"
         await db.flush()
         await db.refresh(existing)
         ctx = get_request_context(request)
@@ -245,17 +249,22 @@ async def add_manual_rate(
         # Курс мог закрыть строки, которые до этого оставались без EUR (или посчитать
         # их точнее) — пересчитываем сразу, чтобы «сохранил курс» и «суммы сошлись»
         # были одним действием, а не двумя.
-        existing.auto = await fx_autoload.auto_finish(
+        # P0-4: НЕ возвращать ORM-объект с навешанным атрибутом `auto`. У маршрута
+        # стоит response_model=FxRateOut, и Pydantic v2 при from_attributes берёт
+        # только объявленные колонки модели — динамический атрибут терялся, и в
+        # HTTP-ответе auto всегда был null. Собираем FxRateOut явно.
+        out = FxRateOut.model_validate(existing)
+        out.auto = await fx_autoload.auto_finish(
             current_user.company_id, rates_changed=True,
         )
-        return existing
+        return out
 
     rate = FxRate(
         company_id=current_user.company_id,  # company-specific, NOT global
         currency=body.currency,
         rate_date=body.rate_date,
         rate_to_eur=body.rate_to_eur,
-        source=body.source or "manual",
+        source="manual",  # D-3: клиентский body.source игнорируется намеренно
     )
     db.add(rate)
     await db.flush()
@@ -273,11 +282,13 @@ async def add_manual_rate(
         client_id=ctx.get("client_id"),
     )
     await db.commit()
-    await db.refresh(rate)
-    rate.auto = await fx_autoload.auto_finish(
+    # P0-4 (ветка создания): та же причина, что выше — ORM-объект с навешанным
+    # атрибутом `auto` не донесёт его через response_model=FxRateOut.
+    out = FxRateOut.model_validate(rate)
+    out.auto = await fx_autoload.auto_finish(
         current_user.company_id, rates_changed=True,
     )
-    return rate
+    return out
 
 
 @router.post("/manual-bulk")
@@ -332,7 +343,8 @@ async def add_manual_rates_bulk(
         )).scalar_one_or_none()
         if existing:
             existing.rate_to_eur = body.rate_to_eur
-            existing.source = body.source or "manual"
+            # D-3: источник company-записи всегда "manual" (см. одиночный ввод).
+            existing.source = "manual"
             updated += 1
             first_id = first_id if first_id is not None else existing.id
         else:
@@ -341,7 +353,7 @@ async def add_manual_rates_bulk(
                 currency=currency,
                 rate_date=d,
                 rate_to_eur=body.rate_to_eur,
-                source=body.source or "manual",
+                source="manual",  # D-3: клиентский body.source игнорируется намеренно
             )
             db.add(rate)
             await db.flush()

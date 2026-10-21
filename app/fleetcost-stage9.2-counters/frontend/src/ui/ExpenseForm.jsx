@@ -326,8 +326,6 @@ export function ExpenseFormModal({
       currency: form.currency,
       frequency: form.periodicity,
       start_date: form.expense_date,
-      end_date: mode !== "total" && form.end_date ? form.end_date : null,
-      day_of_month: chargeDay,
       document_ref: form.document_ref.trim() || null,
       comment: form.comment.trim(),   // пустая строка очищает комментарий
       plate_number: form.scope === "vehicle" ? (fixedPlate || form.plate_number) : null,
@@ -338,6 +336,36 @@ export function ExpenseFormModal({
         insurer: form.insurer.trim() || null,
       } : {}),
     };
+
+    // P0-5 (аудит stage9.2): «вычисленные» значения вместо фактических теряли
+    // данные. Раньше сюда всегда уходили day_of_month = chargeDay (при очистке
+    // поля — день из даты начала) и end_date = null (в режиме «за год» очистка
+    // «Платить до» делала договор бессрочным молча). Теперь ключ отправляется
+    // ТОЛЬКО если значение реально отличается от исходного договора; явная
+    // очистка уходит как null — сервер различает «не прислали» / «прислали null».
+    if (initial) {
+      const origDay = initial.day_of_month ?? null;
+      const newDay = form.charge_day === "" ? null : Number(form.charge_day);
+      if (origDay !== newDay) patchPayload.day_of_month = newDay;
+
+      const origEnd = initial.end_date || "";
+      const newEnd = mode !== "total" && form.end_date ? form.end_date : null;
+      if (origEnd !== (newEnd || "")) {
+        // Очистка «Платить до» в режимах «за год»/«за период» делает договор
+        // бессрочным — это осознанный выбор, прошлые списания при этом не
+        // трогаются, но спросить надо до отправки.
+        if (origEnd && !newEnd) {
+          const q = ru
+            ? `Дата окончания будет снята, договор станет бессрочным (будущие платежи продолжатся после прежней даты). Уже созданные списания не изменятся. Продолжить?`
+            : `The end date will be removed and the contract becomes open-ended (future charges continue past the old end date). Existing charges are untouched. Continue?`;
+          if (!window.confirm(q)) { setBusy(false); return; }
+        }
+        patchPayload.end_date = newEnd;
+      }
+    } else {
+      patchPayload.day_of_month = isRecurring ? chargeDay : 1;
+      patchPayload.end_date = mode !== "total" && form.end_date ? form.end_date : null;
+    }
 
     // Дата начала в прошлом: все прошедшие списания создаются сразу и сразу
     // попадают в расходы. Это должен быть осознанный выбор, а не побочный эффект.
@@ -608,11 +636,12 @@ export function ExpenseFormModal({
           <input id="fc-ef-comment" style={s.input} value={form.comment}
                  onChange={(e) => set({ comment: e.target.value })} />
         </div>
-      </div>
 
-        {/* Полисные признаки — только для страхования. Страна здесь именно признак
-            полиса: одно и то же КАСКО в разных странах оформляют разные страховщики
-            по разным правилам, и кодом категории это не выразить. */}
+        {/* P0-1 (аудит stage9.2): раньше grid-контейнер закрывался ДО этого
+            блока, и три полисных поля рендерились наружи сетки — на всю
+            ширину модалки, визуально отрываясь от формы. Теперь они внутри
+            grid: два поля в ряд, страховая компания — на всю ширину, чтобы
+            не оставлять «одинокую» ячейку. */}
         {isInsuranceSection && (
           <>
             <div>
@@ -626,13 +655,14 @@ export function ExpenseFormModal({
               <input id="fc-ef-policy" style={s.input} maxLength={100} value={form.policy_number}
                      onChange={(e) => set({ policy_number: e.target.value })} />
             </div>
-            <div>
+            <div style={{ gridColumn: "1/-1" }}>
               <label style={s.label} htmlFor="fc-ef-insurer">{ru ? "Страховая компания" : "Insurer"}</label>
               <input id="fc-ef-insurer" style={s.input} maxLength={200} value={form.insurer}
                      onChange={(e) => set({ insurer: e.target.value })} />
             </div>
           </>
         )}
+      </div>
 
       {isRecurring && preview && (
         <div style={{
